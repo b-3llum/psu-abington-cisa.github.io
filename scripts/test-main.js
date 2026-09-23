@@ -106,6 +106,42 @@ function assertTrue(cond, msg) {
   assertTrue(ics.indexOf('BEGIN:VEVENT') !== -1, 'toIcs: has BEGIN:VEVENT');
 })();
 
+// ---- toIcsCalendar: several events in one calendar ----
+(function () {
+  var a = { id: 'a', occId: 'a', title: 'A', date: '2026-10-01', start: '12:15', end: '13:15' };
+  var b = { id: 'b', occId: 'b', title: 'B', date: '2026-10-15', start: '12:15', end: '13:15' };
+  var ics = main.toIcsCalendar([a, b]);
+  assertEqual(ics.split('BEGIN:VEVENT').length - 1, 2, 'toIcsCalendar: two VEVENTs');
+  assertEqual(ics.split('BEGIN:VCALENDAR').length - 1, 1, 'toIcsCalendar: one VCALENDAR');
+  assertEqual(main.toIcs(a), main.toIcsCalendar([a]), 'toIcs: same as a one-event calendar');
+})();
+
+// ---- daysUntil / relativeDayLabel ----
+(function () {
+  var now = new Date(2026, 8, 23, 23, 30);
+  assertEqual(main.daysUntil('2026-09-23', now), 0, 'daysUntil: same day is 0');
+  assertEqual(main.daysUntil('2026-09-24', now), 1, 'daysUntil: next day is 1 even late at night');
+  assertEqual(main.daysUntil('2026-10-01', now), 8, 'daysUntil: Oct 1 is 8 days after Sep 23');
+  assertEqual(main.daysUntil('2026-11-02', new Date(2026, 9, 31, 9, 0)), 2, 'daysUntil: counts calendar days across a DST change');
+  assertEqual(main.relativeDayLabel(0), 'Today', 'relativeDayLabel: today');
+  assertEqual(main.relativeDayLabel(1), 'Tomorrow', 'relativeDayLabel: tomorrow');
+  assertEqual(main.relativeDayLabel(8), 'In 8 days', 'relativeDayLabel: in N days');
+})();
+
+// ---- splitBoard / joinNames ----
+(function () {
+  var split = main.splitBoard([
+    { name: 'A', role: 'President' },
+    { name: 'B', role: 'Co-Advisor' },
+    { name: 'C', role: 'Faculty Advisor' }
+  ]);
+  assertEqual(split.people.map(function (m) { return m.name; }), ['A'], 'splitBoard: officers');
+  assertEqual(split.advisors.map(function (m) { return m.name; }), ['B', 'C'], 'splitBoard: advisors');
+  assertEqual(main.joinNames(['A']), 'A', 'joinNames: one');
+  assertEqual(main.joinNames(['A', 'B']), 'A and B', 'joinNames: two');
+  assertEqual(main.joinNames(['A', 'B', 'C']), 'A, B, and C', 'joinNames: three');
+})();
+
 // ---- escapeHtml ----
 (function () {
   assertEqual(main.escapeHtml('<script>alert("x")</script>'),

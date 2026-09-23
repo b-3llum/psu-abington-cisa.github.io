@@ -21,16 +21,16 @@ Meetings and events live in [`data/events.json`](data/events.json). Edit that fi
 | `id` | yes | slug string | Must be unique across all events. |
 | `title` | yes | string | Shown everywhere as the event name. |
 | `date` | yes | `YYYY-MM-DD` | First/only occurrence date. |
-| `type` | yes | one of `meeting`, `come-hack`, `workshop`, `social`, `competition`, `other` | Controls the color used in the calendar. |
+| `type` | yes | one of `meeting`, `come-hack`, `workshop`, `social`, `competition`, `other` | Categorizes the event. |
 | `start` | no | `HH:MM` (24h) | Omit both `start` and `end` for an all-day event. |
 | `end` | no | `HH:MM` (24h) | Must be after `start`. |
 | `location` | no | string | e.g. `"Academic Building 309"`. |
-| `summary` | no | string | One line, shown in cards and list rows. |
+| `summary` | no | string | One line, shown on the "Next session" card at the top of the page. |
 | `description` | no | string | Longer text, shown in the detail panel. |
 | `url` | no | URL | Must start with `http://` or `https://`. Shown as "Details"/"Event page". |
 | `tags` | no | array of strings | Small labels shown on the event. |
-| `featured` | no | boolean | Adds a highlighted border in the list view. |
-| `cancelled` | no | boolean | Strikes the title and shows a "Cancelled" badge. |
+| `featured` | no | boolean | Reserved; not currently shown. |
+| `cancelled` | no | boolean | Hides the occurrence from the page. |
 | `repeat` | no | object | See below — expands into multiple occurrences. |
 
 **Recurrence example** — a biweekly meeting every other Thursday from Oct 1 through Dec 10,
@@ -156,12 +156,15 @@ scripts/test-main.js             Node unit tests for assets/js/main.js helpers
 .github/workflows/validate-data.yml  CI: runs the validator on push/PR
 ```
 
-## Hero background image
+## How the page uses the data
 
-The photo behind the top section is `assets/img/hero-bg.jpg`. Replace it with any landscape JPG
-(recommended at least 1600px wide, ideally under 400 KB). The stylesheet shades it automatically in
-both themes so the headline stays readable; if the file is missing, the section simply shows the
-flat page background. Only use a photo the club has the rights to publish.
+- The **Next session** card at the top, the closing "See you ..." banner, and the date tiles under
+  "Pick a Thursday" all come from `data/events.json`. Past and cancelled occurrences are left out
+  automatically, and the next six upcoming ones get a tile.
+- Dates listed in a `repeat.skip` block show up as "No session on ..." under the tiles.
+- Anyone in `data/board.json` whose role contains "Advisor" is listed in the "Faculty advisors" line
+  instead of getting a photo card.
+- Founders with a `title` or `org` appear in the "Where CISA's founders work now" banner.
 
 ## Font & theme
 

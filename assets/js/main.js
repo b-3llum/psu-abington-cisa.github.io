@@ -15,10 +15,9 @@
 
   var MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
-  var MONTH_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  var MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  var WEEKDAY_SHORT = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-  var EVENT_TYPES = ['meeting', 'come-hack', 'workshop', 'social', 'competition', 'other'];
+  var WEEKDAY_SHORT_TITLE = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   function pad2(n) {
     return n < 10 ? '0' + n : String(n);
@@ -231,14 +230,11 @@
     return out.join('\r\n');
   }
 
-  /** Build a floating-local-time .ics VCALENDAR document for one occurrence. */
-  function toIcs(occ) {
+
+  /** The VEVENT lines (unfolded) for one occurrence. */
+  function veventLines(occ) {
     var dt = occ.date.replace(/-/g, '');
     var lines = [];
-    lines.push('BEGIN:VCALENDAR');
-    lines.push('VERSION:2.0');
-    lines.push('PRODID:-//CISA Penn State Abington//Events//EN');
-    lines.push('CALSCALE:GREGORIAN');
     lines.push('BEGIN:VEVENT');
     lines.push('UID:' + (occ.occId || occ.id) + '@psu-abington-cisa.github.io');
     if (occ.start) {
@@ -254,8 +250,54 @@
     if (occ.location) lines.push('LOCATION:' + icsEscape(occ.location));
     if (occ.url) lines.push('URL:' + icsEscape(occ.url));
     lines.push('END:VEVENT');
+    return lines;
+  }
+
+  /** Build a floating-local-time .ics VCALENDAR document holding several occurrences. */
+  function toIcsCalendar(occs) {
+    var lines = [];
+    lines.push('BEGIN:VCALENDAR');
+    lines.push('VERSION:2.0');
+    lines.push('PRODID:-//CISA Penn State Abington//Events//EN');
+    lines.push('CALSCALE:GREGORIAN');
+    occs.forEach(function (occ) { lines = lines.concat(veventLines(occ)); });
     lines.push('END:VCALENDAR');
     return lines.map(foldLine).join('\r\n');
+  }
+
+  /** Build a floating-local-time .ics VCALENDAR document for one occurrence. */
+  function toIcs(occ) {
+    return toIcsCalendar([occ]);
+  }
+
+  /** Whole calendar days from `now`'s date to a YYYY-MM-DD date (0 = today). */
+  function daysUntil(dateStr, now) {
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return Math.round((parseLocal(dateStr) - today) / 86400000);
+  }
+
+  /** "Today" / "Tomorrow" / "In 8 days" for a non-negative day count. */
+  function relativeDayLabel(days) {
+    if (days <= 0) return 'Today';
+    if (days === 1) return 'Tomorrow';
+    return 'In ' + days + ' days';
+  }
+
+  /** Split a board roster into student officers and faculty advisors. */
+  function splitBoard(members) {
+    var people = [];
+    var advisors = [];
+    (members || []).forEach(function (m) {
+      if (/advis/i.test(m.role || '')) advisors.push(m); else people.push(m);
+    });
+    return { people: people, advisors: advisors };
+  }
+
+  /** "A", "A and B", "A, B, and C". */
+  function joinNames(names) {
+    if (names.length <= 1) return names.join('');
+    if (names.length === 2) return names[0] + ' and ' + names[1];
+    return names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1];
   }
 
   // =======================================================================
@@ -263,23 +305,18 @@
   // =======================================================================
 
   function initBrowser() {
-    var STORAGE_KEY = 'cisa-calendar-view';
     var THEME_KEY = 'cisa-theme';
+    var MAX_TILES = 6;
 
     var state = {
-      events: [],       // raw events from JSON (unexpanded)
       occurrences: [],  // expanded + sorted occurrences
-      board: [],
-      founders: [],
-      view: null,       // 'month' | 'list'
-      cursorYear: null,
-      cursorMonth: null, // 0-based
-      selectedOccId: null
+      skips: []         // YYYY-MM-DD dates a recurring event skips
     };
 
     document.addEventListener('DOMContentLoaded', function () {
       wireStaticUI();
       wireThemeToggle();
+      wireMenu();
       loadEvents();
       loadBoard();
       loadFounders();
@@ -297,6 +334,13 @@
       try { window.localStorage.setItem(key, val); } catch (e) { /* ignore */ }
     }
 
+    function getJson(url) {
+      return fetch(url, { cache: 'no-cache' }).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      });
+    }
+
     // ---------------- Theme toggle ----------------
 
     function wireThemeToggle() {
@@ -311,7 +355,7 @@
 
       function applyLabelAndMeta(theme) {
         if (btn) btn.setAttribute('aria-label', theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme');
-        if (metaThemeColor) metaThemeColor.setAttribute('content', theme === 'light' ? '#f4f7fc' : '#050b18');
+        if (metaThemeColor) metaThemeColor.setAttribute('content', theme === 'light' ? '#0b1f3a' : '#070e1c');
       }
 
       var current = resolveTheme(safeLocalGet(THEME_KEY), systemPrefersLight());
@@ -338,486 +382,276 @@
       }
     }
 
-    // ---------------- data loading ----------------
+    // ---------------- Mobile menu ----------------
+
+    function wireMenu() {
+      var btn = document.getElementById('menu-toggle');
+      var nav = document.getElementById('site-nav');
+      if (!btn || !nav) return;
+      function setOpen(open) {
+        nav.classList.toggle('open', open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+      btn.addEventListener('click', function () {
+        setOpen(btn.getAttribute('aria-expanded') !== 'true');
+      });
+      nav.addEventListener('click', function (e) {
+        if (e.target.closest('a')) setOpen(false);
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && btn.getAttribute('aria-expanded') === 'true') {
+          setOpen(false);
+          btn.focus();
+        }
+      });
+    }
+
+    // ---------------- Events ----------------
 
     function loadEvents() {
-      fetch('./data/events.json', { cache: 'no-cache' })
-        .then(function (res) {
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          return res.json();
-        })
+      getJson('./data/events.json')
         .then(function (data) {
-          state.events = Array.isArray(data.events) ? data.events : [];
+          var events = Array.isArray(data.events) ? data.events : [];
           var all = [];
-          state.events.forEach(function (ev) {
+          var skips = [];
+          events.forEach(function (ev) {
             expandRepeat(ev).forEach(function (occ) { all.push(occ); });
+            if (ev.repeat && Array.isArray(ev.repeat.skip)) skips = skips.concat(ev.repeat.skip);
           });
           all.sort(function (a, b) {
-            var da = parseLocal(a.date, a.start || '00:00');
-            var db = parseLocal(b.date, b.start || '00:00');
-            return da - db;
+            return parseLocal(a.date, a.start || '00:00') - parseLocal(b.date, b.start || '00:00');
           });
           state.occurrences = all;
-
-          var now = new Date();
-          state.cursorYear = now.getFullYear();
-          state.cursorMonth = now.getMonth();
-
-          var initialView = safeLocalGet(STORAGE_KEY);
-          if (initialView !== 'month' && initialView !== 'list') {
-            initialView = window.innerWidth >= 720 ? 'month' : 'list';
-          }
-          state.view = initialView;
-
-          renderNextUp();
-          renderScheduleControls();
-          renderCalendar();
+          state.skips = skips.sort();
+          renderEvents();
         })
         .catch(function (err) {
           console.error('Failed to load events.json', err);
-          renderEventsError();
+          setHtml('date-tiles', '<p class="empty-msg">Could not load the schedule right now. Check <a href="https://www.instagram.com/abingtoncisa">Instagram</a> for dates.</p>');
         });
     }
 
+    function upcomingOccurrences() {
+      var now = new Date();
+      return state.occurrences.filter(function (occ) {
+        if (occ.cancelled) return false;
+        return parseLocal(occ.date, occ.end || occ.start || '23:59') >= now;
+      });
+    }
+
+    function icsHref(occs) {
+      return 'data:text/calendar;charset=utf-8,' + encodeURIComponent(toIcsCalendar(occs));
+    }
+
+    function shortDate(d) {
+      return WEEKDAY_SHORT_TITLE[d.getDay()] + ', ' + MONTH_ABBR[d.getMonth()] + ' ' + d.getDate();
+    }
+
+    function renderEvents() {
+      var upcoming = upcomingOccurrences();
+      var next = upcoming[0] || null;
+      renderTicket(next);
+      renderCta(next);
+      renderTiles(upcoming);
+      renderSkipNote();
+    }
+
+    function renderTicket(next) {
+      var el = document.getElementById('ticket');
+      if (!el) return;
+      if (!next) {
+        el.innerHTML = '<div class="ticket-head"><span class="ticket-kicker">Next session</span>' +
+          '<span class="ticket-title">Dates coming soon</span>' +
+          '<span class="ticket-sub">Follow <a href="https://www.instagram.com/abingtoncisa">@abingtoncisa</a> for the next announcement.</span></div>';
+        return;
+      }
+      var d = parseLocal(next.date, next.start || '00:00');
+      var days = daysUntil(next.date, new Date());
+      var html = '';
+      html += '<div class="ticket-head">';
+      html += '<span class="ticket-kicker">Next session · ' + escapeHtml(relativeDayLabel(days)) + '</span>';
+      html += '<span class="ticket-title">' + escapeHtml(next.title) + '</span>';
+      if (next.summary) html += '<span class="ticket-sub">' + escapeHtml(next.summary) + '</span>';
+      html += '</div>';
+      html += '<dl class="ticket-facts">';
+      html += '<div><dt>Date</dt><dd>' + escapeHtml(shortDate(d)) + '</dd></div>';
+      html += '<div><dt>Time</dt><dd>' + escapeHtml(next.start ? fmtTime(next.start) : 'All day') + '</dd></div>';
+      html += '<div><dt>Room</dt><dd>' + escapeHtml(next.location || 'TBA') + '</dd></div>';
+      html += '</dl>';
+      html += '<div class="ticket-foot">';
+      html += '<span>' + escapeHtml(next.start && next.end ? fmtTime(next.start, next.end) : 'Open to every Abington student.') + '</span>';
+      html += '<span class="ticket-actions">';
+      html += '<a class="btn btn-dark btn-sm" href="' + escapeHtml(toGCal(next)) + '" target="_blank" rel="noopener">Google Calendar</a>';
+      html += '<a class="btn btn-line btn-sm" href="' + icsHref([next]) + '" download="cisa-' + escapeHtml(next.occId || next.id) + '.ics">.ics</a>';
+      html += '</span></div>';
+      el.innerHTML = html;
+
+      var heroCal = document.getElementById('hero-cal');
+      if (heroCal) setExternal(heroCal, toGCal(next));
+    }
+
+    function renderCta(next) {
+      var title = document.getElementById('cta-title');
+      var meta = document.getElementById('cta-meta');
+      var btn = document.getElementById('cta-cal');
+      if (!title) return;
+      if (!next) {
+        title.textContent = 'See you at the next session.';
+        if (meta) meta.textContent = 'Dates are announced on Instagram and Penn State Discover.';
+        if (btn) btn.hidden = true;
+        return;
+      }
+      var d = parseLocal(next.date, next.start || '00:00');
+      var days = daysUntil(next.date, new Date());
+      title.textContent = days === 0 ? 'See you today.' : 'See you ' + WEEKDAY_NAMES[d.getDay()] + ', ' + MONTH_ABBR[d.getMonth()] + ' ' + d.getDate() + '.';
+      var bits = [];
+      if (next.start) bits.push(fmtTime(next.start));
+      if (next.location) bits.push(next.location);
+      bits.push('Bring a friend.');
+      if (meta) meta.textContent = bits.join(' · ');
+      if (btn) setExternal(btn, toGCal(next));
+    }
+
+    function renderTiles(upcoming) {
+      var el = document.getElementById('date-tiles');
+      var all = document.getElementById('all-dates');
+      if (!el) return;
+      if (upcoming.length === 0) {
+        el.innerHTML = '<p class="empty-msg">No sessions scheduled yet. Check <a href="https://www.instagram.com/abingtoncisa">Instagram</a> for updates.</p>';
+        if (all) all.hidden = true;
+        return;
+      }
+      var shown = upcoming.slice(0, MAX_TILES);
+      var html = '';
+      shown.forEach(function (occ, i) {
+        var d = parseLocal(occ.date, occ.start || '00:00');
+        var isLast = i === upcoming.length - 1;
+        var tag = i === 0 ? 'Next up' : (isLast ? 'Last one' : WEEKDAY_NAMES[d.getDay()]);
+        var meta = [];
+        if (occ.start) meta.push(fmtTime(occ.start, occ.end));
+        if (occ.location) meta.push(occ.location);
+        html += '<article class="tile' + (i === 0 ? ' tile-next' : '') + '">';
+        html += '<span class="tile-tag">' + escapeHtml(tag) + '</span>';
+        html += '<span class="tile-day">' + d.getDate() + '</span>';
+        html += '<span class="tile-mon">' + escapeHtml(MONTH_NAMES[d.getMonth()]) + '</span>';
+        html += '<span class="tile-title">' + escapeHtml(occ.title.split(' \u2014 ')[0]) + '</span>';
+        html += '<span class="tile-meta">' + meta.map(escapeHtml).join('<br>') + '</span>';
+        html += '<a class="tile-cal" href="' + escapeHtml(toGCal(occ)) + '" target="_blank" rel="noopener" aria-label="Add ' + escapeHtml(occ.title + ' on ' + fmtDate(d)) + ' to Google Calendar">+ Calendar</a>';
+        html += '</article>';
+      });
+      el.innerHTML = html;
+      if (all) {
+        all.hidden = false;
+        all.setAttribute('href', icsHref(upcoming));
+        all.setAttribute('download', 'cisa-sessions.ics');
+      }
+    }
+
+    function renderSkipNote() {
+      var el = document.getElementById('skip-note');
+      if (!el) return;
+      var now = new Date();
+      var todayStr = dateStrOf(now.getFullYear(), now.getMonth() + 1, now.getDate());
+      var future = state.skips.filter(function (s) { return s >= todayStr; });
+      var parts = [];
+      if (future.length) {
+        parts.push('No session on ' + joinNames(future.map(function (s) {
+          var d = parseLocal(s);
+          return MONTH_ABBR[d.getMonth()] + ' ' + d.getDate();
+        })) + '.');
+      }
+      parts.push('Missed one? The slides and write-ups are online, so you can catch up and still come to the next.');
+      el.textContent = parts.join(' ');
+    }
+
+    // ---------------- People ----------------
+
     function loadBoard() {
-      fetch('./data/board.json', { cache: 'no-cache' })
-        .then(function (res) {
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          return res.json();
-        })
+      getJson('./data/board.json')
         .then(function (data) {
-          state.board = Array.isArray(data.members) ? data.members : [];
-          renderBoard();
+          var split = splitBoard(Array.isArray(data.members) ? data.members : []);
+          renderBoard(split.people);
+          renderAdvisors(split.advisors);
         })
         .catch(function (err) {
           console.error('Failed to load board.json', err);
-          renderBoardError();
+          setHtml('board-grid', '<p class="empty-msg">Could not load the e-board right now.</p>');
         });
     }
 
-    function loadFounders() {
-      fetch('./data/founders.json', { cache: 'no-cache' })
-        .then(function (res) {
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          return res.json();
-        })
-        .then(function (data) {
-          state.founders = Array.isArray(data.founders) ? data.founders : [];
-          renderFounders();
-        })
-        .catch(function (err) {
-          console.error('Failed to load founders.json', err);
-          renderFoundersError();
-        });
-    }
-
-    // ---------------- Next Up ----------------
-
-    function findNextOccurrence() {
-      var now = new Date();
-      for (var i = 0; i < state.occurrences.length; i++) {
-        var occ = state.occurrences[i];
-        if (occ.cancelled) continue;
-        var end = parseLocal(occ.date, occ.end || occ.start || '23:59');
-        if (end >= now) return occ;
-      }
-      return null;
-    }
-
-    function renderNextUp() {
-      var el = document.getElementById('next-card');
-      if (!el) return;
-      var occ = findNextOccurrence();
-      if (!occ) {
-        el.innerHTML = '<p class="next-empty">No upcoming meetings scheduled yet &mdash; check Instagram for updates.</p>';
-        return;
-      }
-      var d = parseLocal(occ.date, occ.start || '00:00');
-      el.innerHTML = buildNextCardHtml(occ, d);
-    }
-
-    function buildNextCardHtml(occ, d) {
-      var html = '';
-      html += '<div class="next-datebox"><span class="mon">' + MONTH_SHORT[d.getMonth()] + '</span><span class="day">' + d.getDate() + '</span></div>';
-      html += '<div class="next-body">';
-      html += '<h3>' + escapeHtml(occ.title) + '</h3>';
-      html += '<div class="next-meta">';
-      html += '<span>' + escapeHtml(fmtDate(d)) + '</span>';
-      if (occ.start) html += '<span>' + escapeHtml(fmtTime(occ.start, occ.end)) + '</span>';
-      if (occ.location) html += '<span>' + escapeHtml(occ.location) + '</span>';
-      html += '</div>';
-      if (occ.summary) html += '<p>' + escapeHtml(occ.summary) + '</p>';
-      html += '<div class="next-links">';
-      if (occ.url && isSafeUrl(occ.url)) {
-        html += '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(occ.url) + '" target="_blank" rel="noopener">Details</a>';
-      }
-      html += '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(toGCal(occ)) + '" target="_blank" rel="noopener">Add to Google Calendar</a>';
-      html += '<a class="btn btn-ghost btn-sm" href="' + icsHref(occ) + '" download="cisa-' + escapeHtml(occ.occId || occ.id) + '.ics">Download .ics</a>';
-      html += '</div></div>';
-      return html;
-    }
-
-    function icsHref(occ) {
-      return 'data:text/calendar;charset=utf-8,' + encodeURIComponent(toIcs(occ));
-    }
-
-    function renderEventsError() {
-      ['next-card'].forEach(function (id) {
-        var el = document.getElementById(id);
-        if (el) el.innerHTML = '<p class="cal-error">Could not load the schedule right now. Please check back later or see our Instagram for updates.</p>';
-      });
-      var cal = document.getElementById('cal-wrap');
-      if (cal) cal.innerHTML = '<p class="cal-error">Could not load the schedule right now. Please check back later or see our Instagram for updates.</p>';
-    }
-
-    // ---------------- Schedule: controls (view toggle, month nav) ----------------
-
-    function renderScheduleControls() {
-      var viewToggle = document.getElementById('view-toggle');
-      if (viewToggle) {
-        var monthBtn = viewToggle.querySelector('[data-view="month"]');
-        var listBtn = viewToggle.querySelector('[data-view="list"]');
-        function updatePressed() {
-          if (monthBtn) monthBtn.setAttribute('aria-pressed', String(state.view === 'month'));
-          if (listBtn) listBtn.setAttribute('aria-pressed', String(state.view === 'list'));
-        }
-        updatePressed();
-        if (monthBtn) monthBtn.addEventListener('click', function () {
-          state.view = 'month';
-          safeLocalSet(STORAGE_KEY, 'month');
-          updatePressed();
-          renderCalendar();
-        });
-        if (listBtn) listBtn.addEventListener('click', function () {
-          state.view = 'list';
-          safeLocalSet(STORAGE_KEY, 'list');
-          updatePressed();
-          renderCalendar();
-        });
-      }
-
-      var prevBtn = document.getElementById('cal-prev');
-      var nextBtn = document.getElementById('cal-next');
-      var todayBtn = document.getElementById('cal-today');
-      if (prevBtn) prevBtn.addEventListener('click', function () {
-        state.cursorMonth -= 1;
-        if (state.cursorMonth < 0) { state.cursorMonth = 11; state.cursorYear -= 1; }
-        renderCalendar();
-      });
-      if (nextBtn) nextBtn.addEventListener('click', function () {
-        state.cursorMonth += 1;
-        if (state.cursorMonth > 11) { state.cursorMonth = 0; state.cursorYear += 1; }
-        renderCalendar();
-      });
-      if (todayBtn) todayBtn.addEventListener('click', function () {
-        var now = new Date();
-        state.cursorYear = now.getFullYear();
-        state.cursorMonth = now.getMonth();
-        renderCalendar();
-      });
-
-      document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') closeDetailPanel();
-      });
-    }
-
-    // ---------------- Calendar rendering ----------------
-
-    function renderCalendar() {
-      var monthNav = document.getElementById('cal-nav');
-      var calBody = document.getElementById('cal-body');
-      var calWrap = document.getElementById('cal-wrap');
-      if (!calBody) return;
-
-      if (monthNav) monthNav.hidden = state.view !== 'month';
-
-      if (state.view === 'month') {
-        renderMonthGrid(calBody);
-      } else {
-        closeDetailPanel();
-        renderListView(calBody);
-      }
-      if (calWrap) calWrap.classList.toggle('has-detail', !!state.selectedOccId && state.view === 'month');
-    }
-
-    function occurrencesOnDate(dateStr) {
-      return state.occurrences.filter(function (o) { return o.date === dateStr; });
-    }
-
-    function renderMonthGrid(container) {
-      var heading = document.getElementById('cal-heading');
-      if (heading) heading.textContent = MONTH_NAMES[state.cursorMonth] + ' ' + state.cursorYear;
-
-      var firstOfMonth = new Date(state.cursorYear, state.cursorMonth, 1);
-      var startWeekday = firstOfMonth.getDay();
-      var daysInMonth = new Date(state.cursorYear, state.cursorMonth + 1, 0).getDate();
-
-      var now = new Date();
-      var todayStr = dateStrOf(now.getFullYear(), now.getMonth() + 1, now.getDate());
-
-      var cells = [];
-      // leading days from previous month
-      var prevMonthDays = new Date(state.cursorYear, state.cursorMonth, 0).getDate();
-      for (var i = 0; i < startWeekday; i++) {
-        var pm = state.cursorMonth - 1, py = state.cursorYear;
-        if (pm < 0) { pm = 11; py -= 1; }
-        var pd = prevMonthDays - startWeekday + i + 1;
-        cells.push({ y: py, m: pm, d: pd, dim: true });
-      }
-      // days of current month
-      for (var d = 1; d <= daysInMonth; d++) {
-        cells.push({ y: state.cursorYear, m: state.cursorMonth, d: d, dim: false });
-      }
-      // trailing days to fill full weeks (multiple of 7, up to 6 rows)
-      var totalCells = Math.ceil(cells.length / 7) * 7;
-      var nextIdx = 1;
-      while (cells.length < totalCells) {
-        var nm = state.cursorMonth + 1, ny = state.cursorYear;
-        if (nm > 11) { nm = 0; ny += 1; }
-        cells.push({ y: ny, m: nm, d: nextIdx, dim: true });
-        nextIdx++;
-      }
-
-      var html = '';
-      WEEKDAY_SHORT.forEach(function (wd) { html += '<div class="wd">' + wd + '</div>'; });
-
-      cells.forEach(function (cell) {
-        var dateStr = dateStrOf(cell.y, cell.m + 1, cell.d);
-        var dayOccs = occurrencesOnDate(dateStr);
-        var classes = ['day-cell'];
-        if (cell.dim) classes.push('dim');
-        if (dateStr === todayStr) classes.push('today');
-        var interactiveAttrs = '';
-        if (dayOccs.length > 0) {
-          var cellWeekday = WEEKDAY_NAMES[new Date(cell.y, cell.m, cell.d).getDay()];
-          var cellLabel = 'Events on ' + cellWeekday + ', ' + MONTH_NAMES[cell.m] + ' ' + cell.d;
-          interactiveAttrs = ' tabindex="0" role="button" aria-label="' + escapeHtml(cellLabel) + '"';
-        }
-        html += '<div class="' + classes.join(' ') + '" data-date="' + dateStr + '"' + interactiveAttrs + '>';
-        html += '<span class="day-num">' + cell.d + '</span>';
-        dayOccs.slice(0, 3).forEach(function (occ) {
-          var typeVar = 'var(--type-' + typeSlug(occ.type) + ')';
-          var chipClass = 'day-chip' + (occ.cancelled ? ' cancelled' : '');
-          html += '<button type="button" class="' + chipClass + '" style="border-left-color:' + typeVar + '" data-occ="' + escapeHtml(occ.occId) + '" title="' + escapeHtml(occ.title) + '">' + escapeHtml(occ.title) + '</button>';
-        });
-        if (dayOccs.length > 3) {
-          html += '<span class="day-chip" style="background:transparent;border:none;color:var(--muted)">+' + (dayOccs.length - 3) + ' more</span>';
-        }
-        html += '</div>';
-      });
-
-      container.innerHTML = '<div class="month-grid">' + html + '</div>';
-
-      container.querySelectorAll('.day-chip[data-occ]').forEach(function (btn) {
-        btn.addEventListener('click', function (e) {
-          e.stopPropagation();
-          openDetailForOccId(btn.getAttribute('data-occ'));
-        });
-      });
-      container.querySelectorAll('.day-cell').forEach(function (cellEl) {
-        function activateCell() {
-          var dateStr = cellEl.getAttribute('data-date');
-          var occs = occurrencesOnDate(dateStr);
-          if (occs.length > 0) openDetailForOccId(occs[0].occId);
-        }
-        cellEl.addEventListener('click', activateCell);
-        cellEl.addEventListener('keydown', function (e) {
-          // Ignore keydowns bubbling up from a nested chip <button> — those
-          // handle their own activation (and their click stopPropagation()s).
-          if (e.target !== cellEl) return;
-          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-            e.preventDefault();
-            activateCell();
-          }
-        });
-      });
-
-      renderDetailPanel();
-    }
-
-    function typeSlug(type) {
-      if (type === 'come-hack') return 'comehack';
-      if (EVENT_TYPES.indexOf(type) === -1) return 'other';
-      return type;
-    }
-
-    function openDetailForOccId(occId) {
-      state.selectedOccId = occId;
-      var calWrap = document.getElementById('cal-wrap');
-      if (calWrap) calWrap.classList.add('has-detail');
-      renderDetailPanel();
-    }
-
-    function closeDetailPanel() {
-      if (!state.selectedOccId) return;
-      state.selectedOccId = null;
-      var calWrap = document.getElementById('cal-wrap');
-      if (calWrap) calWrap.classList.remove('has-detail');
-      renderDetailPanel();
-    }
-
-    function renderDetailPanel() {
-      var slot = document.getElementById('detail-panel-slot');
-      if (!slot) return;
-      if (!state.selectedOccId) { slot.innerHTML = ''; return; }
-      var occ = state.occurrences.filter(function (o) { return o.occId === state.selectedOccId; })[0];
-      if (!occ) { slot.innerHTML = ''; return; }
-      var d = parseLocal(occ.date, occ.start || '00:00');
-      var typeColor = 'var(--type-' + typeSlug(occ.type) + ')';
-
-      var html = '<div class="detail-panel" style="color:' + typeColor + '" role="region" aria-label="Event details">';
-      html += '<button type="button" class="close-btn" aria-label="Close details">&times;</button>';
-      html += '<span class="type-badge">' + escapeHtml(occ.type) + '</span>';
-      if (occ.cancelled) html += '<span class="cancelled-badge">Cancelled</span>';
-      var titleClass = occ.cancelled ? ' class="row-cancelled"' : '';
-      html += '<h3' + titleClass + ' style="color:var(--heading)">' + escapeHtml(occ.title) + '</h3>';
-      html += '<div class="detail-meta">' + escapeHtml(fmtDate(d));
-      if (occ.start) html += ' &middot; ' + escapeHtml(fmtTime(occ.start, occ.end));
-      html += '</div>';
-      if (occ.location) html += '<div class="detail-meta">' + escapeHtml(occ.location) + '</div>';
-      if (occ.summary) html += '<p style="color:var(--text)">' + escapeHtml(occ.summary) + '</p>';
-      if (occ.description) html += '<p style="color:var(--muted)">' + escapeHtml(occ.description) + '</p>';
-      if (occ.tags && occ.tags.length) {
-        html += '<div class="detail-tags">' + occ.tags.map(function (t) { return '<span>' + escapeHtml(t) + '</span>'; }).join('') + '</div>';
-      }
-      html += '<div class="detail-links">';
-      if (occ.url && isSafeUrl(occ.url)) html += '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(occ.url) + '" target="_blank" rel="noopener">Event page</a>';
-      html += '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(toGCal(occ)) + '" target="_blank" rel="noopener">Google Calendar</a>';
-      html += '<a class="btn btn-ghost btn-sm" href="' + icsHref(occ) + '" download="cisa-' + escapeHtml(occ.occId || occ.id) + '.ics">Download .ics</a>';
-      html += '</div></div>';
-
-      slot.innerHTML = html;
-      var closeBtn = slot.querySelector('.close-btn');
-      if (closeBtn) closeBtn.addEventListener('click', closeDetailPanel);
-    }
-
-    // ---------------- List view ----------------
-
-    function renderListView(container) {
-      var now = new Date();
-      var upcoming = [];
-      var past = [];
-      state.occurrences.forEach(function (occ) {
-        var end = parseLocal(occ.date, occ.end || occ.start || '23:59');
-        if (end >= now) upcoming.push(occ); else past.push(occ);
-      });
-
-      var html = '<div class="event-list">';
-      html += '<h3 class="list-heading">Upcoming</h3>';
-      if (upcoming.length === 0) {
-        html += '<p class="empty-msg">No upcoming meetings scheduled yet &mdash; check Instagram for updates.</p>';
-      } else {
-        upcoming.forEach(function (occ) { html += renderEventRow(occ); });
-      }
-      if (past.length > 0) {
-        html += '<details class="past-details"><summary>Past events (' + past.length + ')</summary>';
-        past.slice().reverse().forEach(function (occ) { html += renderEventRow(occ); });
-        html += '</details>';
-      }
-      html += '</div>';
-      container.innerHTML = html;
-    }
-
-    function renderEventRow(occ) {
-      var d = parseLocal(occ.date, occ.start || '00:00');
-      var rowClasses = 'event-row' + (occ.featured ? ' featured' : '');
-      var titleClass = occ.cancelled ? ' class="row-cancelled"' : '';
-      var html = '<div class="' + rowClasses + '">';
-      html += '<div class="row-date"><span class="mon">' + MONTH_SHORT[d.getMonth()] + '</span><span class="day">' + d.getDate() + '</span></div>';
-      html += '<div class="row-body">';
-      html += '<h4' + titleClass + '>' + escapeHtml(occ.title) + (occ.cancelled ? ' <span class="cancelled-badge">Cancelled</span>' : '') + '</h4>';
-      var metaBits = [];
-      if (occ.start) metaBits.push(fmtTime(occ.start, occ.end));
-      if (occ.location) metaBits.push(occ.location);
-      if (metaBits.length) html += '<div class="row-meta">' + escapeHtml(metaBits.join(' · ')) + '</div>';
-      if (occ.summary) html += '<p>' + escapeHtml(occ.summary) + '</p>';
-      html += '<div class="row-links">';
-      if (occ.url && isSafeUrl(occ.url)) html += '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(occ.url) + '" target="_blank" rel="noopener">Details</a>';
-      html += '<a class="btn btn-ghost btn-sm" href="' + escapeHtml(toGCal(occ)) + '" target="_blank" rel="noopener">Add to calendar</a>';
-      html += '<a class="btn btn-ghost btn-sm" href="' + icsHref(occ) + '" download="cisa-' + escapeHtml(occ.occId || occ.id) + '.ics">.ics</a>';
-      html += '</div></div></div>';
-      return html;
-    }
-
-    // ---------------- People (e-board + founders) ----------------
-
-    function initials(name) {
-      var parts = String(name).trim().split(/\s+/);
-      if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
-      return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
-    }
-
-    // Renders one person card. `imgDir` is the folder their photo lives in.
-    function personCard(m, imgDir) {
-      var isTbd = m.name === 'Name TBD';
-      var html = '<div class="board-card">';
-      if (m.photo) {
-        html += '<img class="board-avatar" src="' + escapeHtml(imgDir + m.photo) + '" alt="' + escapeHtml(m.name) + '">';
-      } else {
-        html += '<img class="board-avatar" src="assets/img/avatar-placeholder.svg" alt="' + (isTbd ? '?' : escapeHtml(initials(m.name))) + '">';
-      }
-      html += '<h3>' + escapeHtml(m.name) + '</h3>';
-      html += '<div class="board-role">' + escapeHtml(m.role) + '</div>';
-      if (m.title || m.org) {
-        var bits = [];
-        if (m.title) bits.push(m.title);
-        if (m.org) bits.push(m.org);
-        html += '<div class="board-title">' + escapeHtml(bits.join(' \u00b7 ')) + '</div>';
-      }
-      if (isTbd) {
-        html += '<div class="board-soon">Photo coming soon</div>';
-      }
+    function personLinks(m) {
       var links = [];
-      if (m.email && isSafeUrl('mailto:' + m.email)) {
-        links.push('<a href="mailto:' + escapeHtml(m.email) + '">Email</a>');
-      }
-      if (m.linkedin && isSafeUrl(m.linkedin)) {
-        links.push('<a href="' + escapeHtml(m.linkedin) + '" target="_blank" rel="noopener">LinkedIn</a>');
-      }
-      if (m.portfolio && isSafeUrl(m.portfolio)) {
-        links.push('<a href="' + escapeHtml(m.portfolio) + '" target="_blank" rel="noopener">Portfolio</a>');
-      }
-      if (links.length) html += '<div class="board-links">' + links.join('') + '</div>';
-      html += '</div>';
-      return html;
+      if (m.email && isSafeUrl('mailto:' + m.email)) links.push('<a href="mailto:' + escapeHtml(m.email) + '">Email</a>');
+      if (m.linkedin && isSafeUrl(m.linkedin)) links.push('<a href="' + escapeHtml(m.linkedin) + '" target="_blank" rel="noopener">LinkedIn</a>');
+      if (m.portfolio && isSafeUrl(m.portfolio)) links.push('<a href="' + escapeHtml(m.portfolio) + '" target="_blank" rel="noopener">Portfolio</a>');
+      return links.length ? '<span class="person-links">' + links.join('') + '</span>' : '';
     }
 
-    function renderBoard() {
+    function renderBoard(people) {
       var el = document.getElementById('board-grid');
       if (!el) return;
-      if (state.board.length === 0) {
+      if (people.length === 0) {
         el.innerHTML = '<p class="empty-msg">E-board information is not available right now.</p>';
         return;
       }
-      var html = '';
-      state.board.forEach(function (m) {
-        html += personCard(m, 'assets/img/board/');
-      });
-      el.innerHTML = html;
+      el.innerHTML = people.map(function (m) {
+        var src = m.photo ? 'assets/img/board/' + m.photo : 'assets/img/avatar-placeholder.svg';
+        return '<article class="person">' +
+          '<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(m.name) + '" loading="lazy" width="160" height="160">' +
+          '<h3>' + escapeHtml(m.name) + '</h3>' +
+          '<span class="person-role">' + escapeHtml(m.role) + '</span>' +
+          personLinks(m) +
+          '</article>';
+      }).join('');
     }
 
-    function renderBoardError() {
-      var el = document.getElementById('board-grid');
-      if (el) el.innerHTML = '<p class="empty-msg">Could not load the e-board roster right now. Please check back later.</p>';
-    }
-
-    function renderFounders() {
-      var el = document.getElementById('founders-grid');
+    function renderAdvisors(advisors) {
+      var el = document.getElementById('advisors');
       if (!el) return;
-      if (state.founders.length === 0) {
-        el.innerHTML = '<p class="empty-msg">Founder information is not available right now.</p>';
-        return;
-      }
-      var html = '';
-      state.founders.forEach(function (f) {
-        html += personCard(f, 'assets/img/founders/');
-      });
-      el.innerHTML = html;
+      if (advisors.length === 0) { el.hidden = true; return; }
+      el.hidden = false;
+      el.innerHTML = 'Faculty advisors: ' + joinNames(advisors.map(function (a) {
+        return a.email && isSafeUrl('mailto:' + a.email)
+          ? '<a href="mailto:' + escapeHtml(a.email) + '">' + escapeHtml(a.name) + '</a>'
+          : escapeHtml(a.name);
+      })) + '.';
     }
 
-    function renderFoundersError() {
-      var el = document.getElementById('founders-grid');
-      if (el) el.innerHTML = '<p class="empty-msg">Could not load the founders right now. Please check back later.</p>';
+    function loadFounders() {
+      getJson('./data/founders.json')
+        .then(function (data) {
+          renderFounders(Array.isArray(data.founders) ? data.founders : []);
+        })
+        .catch(function (err) {
+          console.error('Failed to load founders.json', err);
+        });
+    }
+
+    function renderFounders(founders) {
+      var box = document.getElementById('founders');
+      var el = document.getElementById('founders-text');
+      if (!box || !el) return;
+      var withJobs = founders.filter(function (f) { return f.title || f.org; });
+      if (withJobs.length === 0) { box.hidden = true; return; }
+      el.innerHTML = withJobs.map(function (f) {
+        var job = [f.title, f.org].filter(Boolean).join(' at ');
+        var name = f.linkedin && isSafeUrl(f.linkedin)
+          ? '<a href="' + escapeHtml(f.linkedin) + '" target="_blank" rel="noopener">' + escapeHtml(f.name) + '</a>'
+          : escapeHtml(f.name);
+        return name + ', ' + escapeHtml(job) + '.';
+      }).join(' ');
+      box.hidden = false;
+    }
+
+    function setExternal(link, href) {
+      link.setAttribute('href', href);
+      link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener');
+    }
+
+    function setHtml(id, html) {
+      var el = document.getElementById(id);
+      if (el) el.innerHTML = html;
     }
   }
 
@@ -839,12 +673,17 @@
       toGCal: toGCal,
       toGCalDatesParam: toGCalDatesParam,
       toIcs: toIcs,
+      toIcsCalendar: toIcsCalendar,
       icsEscape: icsEscape,
       foldLine: foldLine,
       escapeHtml: escapeHtml,
       isSafeUrl: isSafeUrl,
       resolveTheme: resolveTheme,
-      nextTheme: nextTheme
+      nextTheme: nextTheme,
+      daysUntil: daysUntil,
+      relativeDayLabel: relativeDayLabel,
+      splitBoard: splitBoard,
+      joinNames: joinNames
     };
   }
 })(typeof window !== 'undefined' ? window : this);
