@@ -21,7 +21,7 @@ Meetings and events live in [`data/events.json`](data/events.json). Edit that fi
 | `id` | yes | slug string | Must be unique across all events. |
 | `title` | yes | string | Shown everywhere as the event name. |
 | `date` | yes | `YYYY-MM-DD` | First/only occurrence date. |
-| `type` | yes | one of `meeting`, `come-hack`, `workshop`, `social`, `competition`, `other` | Categorizes the event. |
+| `type` | yes | one of `meeting`, `come-hack`, `workshop`, `social`, `competition`, `other` | Controls the event's color in the calendar. |
 | `start` | no | `HH:MM` (24h) | Omit both `start` and `end` for an all-day event. |
 | `end` | no | `HH:MM` (24h) | Must be after `start`. |
 | `location` | no | string | e.g. `"Academic Building 309"`. |
@@ -30,7 +30,7 @@ Meetings and events live in [`data/events.json`](data/events.json). Edit that fi
 | `url` | no | URL | Must start with `http://` or `https://`. Shown as "Details"/"Event page". |
 | `tags` | no | array of strings | Small labels shown on the event. |
 | `featured` | no | boolean | Reserved; not currently shown. |
-| `cancelled` | no | boolean | Hides the occurrence from the page. |
+| `cancelled` | no | boolean | Left off the tiles and "Next session" card; struck through with a "Cancelled" badge in the calendar. |
 | `repeat` | no | object | See below — expands into multiple occurrences. |
 
 **Recurrence example** — a biweekly meeting every other Thursday from Oct 1 through Dec 10,
@@ -161,6 +161,8 @@ scripts/test-main.js             Node unit tests for assets/js/main.js helpers
 - The **Next session** card at the top, the closing "See you ..." banner, and the date tiles under
   "Pick a Thursday" all come from `data/events.json`. Past and cancelled occurrences are left out
   automatically, and the next six upcoming ones get a tile.
+- The **calendar** under the tiles has a Month view (click a day for details and calendar links) and
+  a List view with past events tucked away. Phones open in List view; the visitor's choice is remembered.
 - Dates listed in a `repeat.skip` block show up as "No session on ..." under the tiles.
 - Anyone in `data/board.json` whose role contains "Advisor" is listed in the "Faculty advisors" line
   instead of getting a photo card.

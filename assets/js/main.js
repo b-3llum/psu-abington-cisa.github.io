@@ -300,17 +300,55 @@
     return names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1];
   }
 
+  var EVENT_TYPES = ['meeting', 'come-hack', 'workshop', 'social', 'competition', 'other'];
+  var TYPE_LABELS = {
+    'meeting': 'Meeting', 'come-hack': 'Come Hack', 'workshop': 'Workshop',
+    'social': 'Social', 'competition': 'Competition', 'other': 'Other'
+  };
+
+  /** CSS-safe slug for an event type ("come-hack" -> "comehack"; unknown -> "other"). */
+  function typeSlug(type) {
+    if (EVENT_TYPES.indexOf(type) === -1) return 'other';
+    return type.replace('-', '');
+  }
+
+  /**
+   * The YYYY-MM-DD cells of a Sunday-first month grid for (year, month0),
+   * padded with the neighbouring months' days to whole weeks.
+   */
+  function monthGridCells(year, month0) {
+    var first = new Date(year, month0, 1);
+    var start = new Date(year, month0, 1 - first.getDay());
+    var daysInMonth = new Date(year, month0 + 1, 0).getDate();
+    var total = Math.ceil((first.getDay() + daysInMonth) / 7) * 7;
+    var cells = [];
+    for (var i = 0; i < total; i++) {
+      var d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      cells.push({
+        date: dateStrOf(d.getFullYear(), d.getMonth() + 1, d.getDate()),
+        day: d.getDate(),
+        inMonth: d.getMonth() === month0
+      });
+    }
+    return cells;
+  }
+
   // =======================================================================
   // Browser-only code
   // =======================================================================
 
   function initBrowser() {
     var THEME_KEY = 'cisa-theme';
+    var VIEW_KEY = 'cisa-calendar-view';
     var MAX_TILES = 6;
 
     var state = {
       occurrences: [],  // expanded + sorted occurrences
-      skips: []         // YYYY-MM-DD dates a recurring event skips
+      skips: [],        // YYYY-MM-DD dates a recurring event skips
+      view: 'month',    // calendar view: 'month' | 'list'
+      cursorYear: 0,
+      cursorMonth: 0,   // 0-based
+      selectedDate: null
     };
 
     document.addEventListener('DOMContentLoaded', function () {
@@ -427,7 +465,9 @@
         })
         .catch(function (err) {
           console.error('Failed to load events.json', err);
-          setHtml('date-tiles', '<p class="empty-msg">Could not load the schedule right now. Check <a href="https://www.instagram.com/abingtoncisa">Instagram</a> for dates.</p>');
+          var msg = '<p class="empty-msg">Could not load the schedule right now. Check <a href="https://www.instagram.com/abingtoncisa">Instagram</a> for dates.</p>';
+          setHtml('date-tiles', msg);
+          setHtml('cal-body', msg);
         });
     }
 
@@ -454,6 +494,7 @@
       renderCta(next);
       renderTiles(upcoming);
       renderSkipNote();
+      initCalendar();
     }
 
     function renderTicket(next) {
@@ -562,6 +603,212 @@
       }
       parts.push('Missed one? The slides and write-ups are online, so you can catch up and still come to the next.');
       el.textContent = parts.join(' ');
+    }
+
+    // ---------------- Calendar (month + list) ----------------
+
+    function initCalendar() {
+      var now = new Date();
+      state.cursorYear = now.getFullYear();
+      state.cursorMonth = now.getMonth();
+      var stored = safeLocalGet(VIEW_KEY);
+      state.view = (stored === 'month' || stored === 'list') ? stored
+        : (window.innerWidth >= 720 ? 'month' : 'list');
+
+      var toggle = document.getElementById('view-toggle');
+      if (toggle) {
+        toggle.querySelectorAll('button[data-view]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            state.view = btn.getAttribute('data-view');
+            state.selectedDate = null;
+            safeLocalSet(VIEW_KEY, state.view);
+            renderCalendar();
+          });
+        });
+      }
+      bindClick('cal-prev', function () { shiftMonth(-1); });
+      bindClick('cal-next', function () { shiftMonth(1); });
+      bindClick('cal-today', function () {
+        var today = new Date();
+        state.cursorYear = today.getFullYear();
+        state.cursorMonth = today.getMonth();
+        state.selectedDate = null;
+        renderCalendar();
+      });
+      renderCalendar();
+    }
+
+    function bindClick(id, fn) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('click', fn);
+    }
+
+    function shiftMonth(delta) {
+      var d = new Date(state.cursorYear, state.cursorMonth + delta, 1);
+      state.cursorYear = d.getFullYear();
+      state.cursorMonth = d.getMonth();
+      state.selectedDate = null;
+      renderCalendar();
+    }
+
+    function occurrencesOn(dateStr) {
+      return state.occurrences.filter(function (o) { return o.date === dateStr; });
+    }
+
+    function renderCalendar() {
+      var body = document.getElementById('cal-body');
+      var nav = document.querySelector('.cal-nav');
+      var toggle = document.getElementById('view-toggle');
+      if (!body) return;
+      if (toggle) {
+        toggle.querySelectorAll('button[data-view]').forEach(function (btn) {
+          btn.setAttribute('aria-pressed', String(btn.getAttribute('data-view') === state.view));
+        });
+      }
+      if (nav) nav.classList.toggle('is-list', state.view === 'list');
+      if (state.view === 'list') {
+        var heading = document.getElementById('cal-heading');
+        if (heading) heading.textContent = 'All events';
+        renderList(body);
+      } else {
+        renderMonth(body);
+      }
+      renderDetail();
+    }
+
+    function renderMonth(body) {
+      var heading = document.getElementById('cal-heading');
+      if (heading) heading.textContent = MONTH_NAMES[state.cursorMonth] + ' ' + state.cursorYear;
+      var now = new Date();
+      var todayStr = dateStrOf(now.getFullYear(), now.getMonth() + 1, now.getDate());
+
+      var html = '<div class="month-grid">';
+      WEEKDAY_SHORT_TITLE.forEach(function (wd) { html += '<div class="wd" aria-hidden="true">' + wd + '</div>'; });
+      monthGridCells(state.cursorYear, state.cursorMonth).forEach(function (cell) {
+        var occs = occurrencesOn(cell.date);
+        var cls = 'day-cell' + (cell.inMonth ? '' : ' dim') + (cell.date === todayStr ? ' today' : '') +
+          (cell.date === state.selectedDate ? ' selected' : '');
+        if (occs.length === 0) {
+          html += '<div class="' + cls + '"><span class="day-num">' + cell.day + '</span></div>';
+          return;
+        }
+        var d = parseLocal(cell.date);
+        var label = fmtDate(d) + ': ' + occs.map(function (o) { return o.title + (o.cancelled ? ' (cancelled)' : ''); }).join(', ');
+        html += '<button type="button" class="' + cls + ' has-events" data-date="' + cell.date + '" aria-label="' + escapeHtml(label) + '">';
+        html += '<span class="day-num">' + cell.day + '</span>';
+        occs.slice(0, 3).forEach(function (o) {
+          html += '<span class="day-chip type-' + typeSlug(o.type) + (o.cancelled ? ' cancelled' : '') + '">' +
+            escapeHtml(o.title.split(' — ')[0]) + '</span>';
+        });
+        if (occs.length > 3) html += '<span class="day-more">+' + (occs.length - 3) + ' more</span>';
+        html += '</button>';
+      });
+      html += '</div>';
+      body.innerHTML = html;
+
+      body.querySelectorAll('.day-cell.has-events').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var date = btn.getAttribute('data-date');
+          state.selectedDate = state.selectedDate === date ? null : date;
+          renderCalendar();
+          if (state.selectedDate) {
+            var panel = document.querySelector('.detail-panel');
+            if (panel) panel.focus({ preventScroll: window.innerWidth >= 900 });
+          }
+        });
+      });
+    }
+
+    function occurrenceLinks(occ, small) {
+      var cls = 'btn btn-line' + (small ? ' btn-sm' : '');
+      var html = '';
+      if (occ.url && isSafeUrl(occ.url)) html += '<a class="' + cls + '" href="' + escapeHtml(occ.url) + '" target="_blank" rel="noopener">Details</a>';
+      if (!occ.cancelled) {
+        html += '<a class="' + cls + '" href="' + escapeHtml(toGCal(occ)) + '" target="_blank" rel="noopener">Google Calendar</a>';
+        html += '<a class="' + cls + '" href="' + icsHref([occ]) + '" download="cisa-' + escapeHtml(occ.occId || occ.id) + '.ics">.ics</a>';
+      }
+      return html;
+    }
+
+    function renderDetail() {
+      var slot = document.getElementById('cal-detail');
+      var wrap = document.getElementById('cal-wrap');
+      if (!slot) return;
+      var occs = state.view === 'month' && state.selectedDate ? occurrencesOn(state.selectedDate) : [];
+      if (wrap) wrap.classList.toggle('has-detail', occs.length > 0);
+      if (occs.length === 0) { slot.innerHTML = ''; return; }
+
+      var d = parseLocal(state.selectedDate);
+      var html = '<div class="detail-panel" tabindex="-1" role="region" aria-label="Events on ' + escapeHtml(fmtDate(d)) + '">';
+      html += '<div class="detail-top"><span class="detail-date">' + escapeHtml(fmtDate(d)) + '</span>';
+      html += '<button type="button" class="detail-close" aria-label="Close event details">&times;</button></div>';
+      occs.forEach(function (o) {
+        html += '<article class="detail-event">';
+        html += '<span class="type-badge type-' + typeSlug(o.type) + '">' + escapeHtml(TYPE_LABELS[o.type] || 'Other') + '</span>';
+        if (o.cancelled) html += '<span class="cancelled-badge">Cancelled</span>';
+        html += '<h4' + (o.cancelled ? ' class="is-cancelled"' : '') + '>' + escapeHtml(o.title) + '</h4>';
+        var meta = [];
+        if (o.start) meta.push(fmtTime(o.start, o.end));
+        if (o.location) meta.push(o.location);
+        if (meta.length) html += '<p class="detail-meta">' + escapeHtml(meta.join(' · ')) + '</p>';
+        if (o.description || o.summary) html += '<p>' + escapeHtml(o.description || o.summary) + '</p>';
+        if (o.tags && o.tags.length) {
+          html += '<ul class="detail-tags">' + o.tags.map(function (t) { return '<li>' + escapeHtml(t) + '</li>'; }).join('') + '</ul>';
+        }
+        html += '<div class="detail-links">' + occurrenceLinks(o, true) + '</div>';
+        html += '</article>';
+      });
+      html += '</div>';
+      slot.innerHTML = html;
+      var close = slot.querySelector('.detail-close');
+      if (close) {
+        close.addEventListener('click', function () {
+          var date = state.selectedDate;
+          state.selectedDate = null;
+          renderCalendar();
+          var cell = document.querySelector('.day-cell[data-date="' + date + '"]');
+          if (cell) cell.focus();
+        });
+      }
+    }
+
+    function renderList(body) {
+      var now = new Date();
+      var upcoming = [];
+      var past = [];
+      state.occurrences.forEach(function (o) {
+        if (parseLocal(o.date, o.end || o.start || '23:59') >= now) upcoming.push(o); else past.push(o);
+      });
+      var html = '<div class="event-list">';
+      if (upcoming.length === 0) {
+        html += '<p class="empty-msg">No upcoming events yet. Check <a href="https://www.instagram.com/abingtoncisa">Instagram</a> for updates.</p>';
+      } else {
+        html += upcoming.map(eventRow).join('');
+      }
+      if (past.length) {
+        html += '<details class="past"><summary>Past events (' + past.length + ')</summary>' +
+          past.slice().reverse().map(eventRow).join('') + '</details>';
+      }
+      html += '</div>';
+      body.innerHTML = html;
+    }
+
+    function eventRow(o) {
+      var d = parseLocal(o.date, o.start || '00:00');
+      var meta = [WEEKDAY_NAMES[d.getDay()]];
+      if (o.start) meta.push(fmtTime(o.start, o.end));
+      if (o.location) meta.push(o.location);
+      var html = '<article class="event-row">';
+      html += '<div class="row-date"><span class="row-mon">' + MONTH_ABBR[d.getMonth()] + '</span><span class="row-day">' + d.getDate() + '</span></div>';
+      html += '<div class="row-body">';
+      html += '<h4' + (o.cancelled ? ' class="is-cancelled"' : '') + '><span class="legend-dot type-' + typeSlug(o.type) + '" aria-hidden="true"></span>' +
+        escapeHtml(o.title) + (o.cancelled ? ' <span class="cancelled-badge">Cancelled</span>' : '') + '</h4>';
+      html += '<p class="row-meta">' + escapeHtml(meta.join(' · ')) + '</p>';
+      if (o.summary) html += '<p class="row-summary">' + escapeHtml(o.summary) + '</p>';
+      html += '</div>';
+      html += '<div class="row-links">' + occurrenceLinks(o, true) + '</div>';
+      html += '</article>';
+      return html;
     }
 
     // ---------------- People ----------------
@@ -674,6 +921,8 @@
       toGCalDatesParam: toGCalDatesParam,
       toIcs: toIcs,
       toIcsCalendar: toIcsCalendar,
+      typeSlug: typeSlug,
+      monthGridCells: monthGridCells,
       icsEscape: icsEscape,
       foldLine: foldLine,
       escapeHtml: escapeHtml,

@@ -188,6 +188,37 @@
         <p class="empty-msg">Loading dates…</p>
       </div>
       <p class="note" id="skip-note">Missed one? The slides and write-ups are online, so you can catch up and still come to the next.</p>
+
+      <div class="calendar" id="calendar">
+        <div class="cal-toolbar">
+          <div class="cal-nav">
+            <button type="button" class="cal-btn" id="cal-prev" aria-label="Previous month">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg>
+            </button>
+            <h3 class="cal-heading" id="cal-heading" aria-live="polite">Calendar</h3>
+            <button type="button" class="cal-btn" id="cal-next" aria-label="Next month">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>
+            </button>
+            <button type="button" class="cal-today" id="cal-today">Today</button>
+          </div>
+          <div class="view-toggle" id="view-toggle" role="group" aria-label="Calendar view">
+            <button type="button" data-view="month" aria-pressed="true">Month</button>
+            <button type="button" data-view="list" aria-pressed="false">List</button>
+          </div>
+        </div>
+        <div class="cal-wrap" id="cal-wrap">
+          <div id="cal-body"><p class="empty-msg">Loading calendar…</p></div>
+          <div id="cal-detail"></div>
+        </div>
+        <ul class="legend" aria-label="Event types">
+          <li><span class="legend-dot type-meeting"></span>Meeting</li>
+          <li><span class="legend-dot type-comehack"></span>Come Hack</li>
+          <li><span class="legend-dot type-workshop"></span>Workshop</li>
+          <li><span class="legend-dot type-social"></span>Social</li>
+          <li><span class="legend-dot type-competition"></span>Competition</li>
+          <li><span class="legend-dot type-other"></span>Other</li>
+        </ul>
+      </div>
     </div>
   </section>
 

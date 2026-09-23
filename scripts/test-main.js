@@ -142,6 +142,20 @@ function assertTrue(cond, msg) {
   assertEqual(main.joinNames(['A', 'B', 'C']), 'A, B, and C', 'joinNames: three');
 })();
 
+// ---- monthGridCells / typeSlug ----
+(function () {
+  var sep = main.monthGridCells(2026, 8); // September 2026 starts on a Tuesday
+  assertEqual(sep.length, 35, 'monthGridCells: Sep 2026 fills five weeks');
+  assertEqual(sep[0].date, '2026-08-30', 'monthGridCells: grid starts on the Sunday before');
+  assertEqual(sep[2], { date: '2026-09-01', day: 1, inMonth: true }, 'monthGridCells: first of month in column 3');
+  assertEqual(sep[34].date, '2026-10-03', 'monthGridCells: grid ends on a Saturday');
+  assertEqual(sep.filter(function (c) { return c.inMonth; }).length, 30, 'monthGridCells: 30 days in month');
+  assertEqual(main.monthGridCells(2026, 1).length, 28, 'monthGridCells: Feb 2026 is exactly four weeks');
+  assertEqual(main.typeSlug('come-hack'), 'comehack', 'typeSlug: strips hyphen');
+  assertEqual(main.typeSlug('meeting'), 'meeting', 'typeSlug: known type');
+  assertEqual(main.typeSlug('party'), 'other', 'typeSlug: unknown type is other');
+})();
+
 // ---- escapeHtml ----
 (function () {
   assertEqual(main.escapeHtml('<script>alert("x")</script>'),
