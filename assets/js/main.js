@@ -885,8 +885,8 @@
         var name = f.linkedin && isSafeUrl(f.linkedin)
           ? '<a href="' + escapeHtml(f.linkedin) + '" target="_blank" rel="noopener">' + escapeHtml(f.name) + '</a>'
           : escapeHtml(f.name);
-        return name + ', ' + escapeHtml(job) + '.';
-      }).join(' ');
+        return '<span class="founder-line">' + name + ', ' + escapeHtml(job) + '</span>';
+      }).join('');
       box.hidden = false;
     }
 
