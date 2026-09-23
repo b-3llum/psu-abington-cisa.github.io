@@ -582,7 +582,7 @@
     function personLinks(m) {
       var links = [];
       if (m.email && isSafeUrl('mailto:' + m.email)) links.push('<a href="mailto:' + escapeHtml(m.email) + '">Email</a>');
-      if (m.linkedin && isSafeUrl(m.linkedin)) links.push('<a href="' + escapeHtml(m.linkedin) + '" target="_blank" rel="noopener">LinkedIn</a>');
+      if (m.linkedin && isSafeUrl(m.linkedin)) links.push('<br><a href="' + escapeHtml(m.linkedin) + '" target="_blank" rel="noopener">LinkedIn</a>');
       if (m.portfolio && isSafeUrl(m.portfolio)) links.push('<a href="' + escapeHtml(m.portfolio) + '" target="_blank" rel="noopener">Portfolio</a>');
       return links.length ? '<span class="person-links">' + links.join('') + '</span>' : '';
     }
